@@ -1,0 +1,27 @@
+diff --git a/keyboards/keychron/k8_pro/k8_pro.c b/keyboards/keychron/k8_pro/k8_pro.c
+index ba0cd7e8..0760910e 100644
+--- a/keyboards/keychron/k8_pro/k8_pro.c
++++ b/keyboards/keychron/k8_pro/k8_pro.c
+@@ -29,6 +29,10 @@
+ #    include "factory_test.h"
+ #endif
+ 
++#ifdef KEYLUME_ENABLE
++#    include "keylume.h"
++#endif
++
+ #define POWER_ON_LED_DURATION 3000
+ 
+ typedef struct PACKED {
+@@ -303,6 +307,11 @@ bool via_command_kb(uint8_t *data, uint8_t length) {
+         case 0xAB:
+             factory_test_rx(data, length);
+             break;
++#endif
++#ifdef KEYLUME_ENABLE
++        case KEYLUME_CMD_ID:
++            keylume_hid_receive(data, length);
++            break;
+ #endif
+         default:
+             return false;

@@ -56,12 +56,59 @@ normal RGB mode after a configurable timeout.
 - [QMK](https://docs.qmk.fm/) build environment
 - Keychron K8 Pro ISO RGB source tree
 
+## Quick start
+
+```bash
+# 1. Clone
+git clone git@github.com:RicardoHS/keylume.git ~/git/keylume
+cd ~/git/keylume
+
+# 2. Install the daemon
+uv pip install -e ".[all]"
+
+# 3. Patch and compile the firmware (see Firmware section below)
+./firmware/install.sh ~/git/qmk_firmware
+cd ~/git/qmk_firmware
+qmk compile -kb keychron/k8_pro/iso/rgb -km custom
+
+# 4. Flash (hold ESC + plug USB cable to enter DFU mode)
+dfu-util -a 0 -d 0483:DF11 -s 0x08000000:leave -D keychron_k8_pro_iso_rgb_custom.bin
+
+# 5. Set up HID permissions (once)
+sudo tee /etc/udev/rules.d/50-keylume.rules <<< \
+  'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="3434", ATTRS{idProduct}=="0281", MODE="0660", GROUP="plugdev"'
+sudo udevadm control --reload-rules && sudo udevadm trigger
+sudo usermod -aG plugdev $USER  # then log out and back in
+
+# 6. Test
+keylume status              # should print PONG with led_count=88
+keylume test 255,0,0        # all LEDs red (auto-reverts in 10s)
+keylume -v start            # run the daemon
+```
+
 ## Installation
+
+### Prerequisites
+
+```bash
+# Debian/Ubuntu
+sudo apt install gcc-arm-none-eabi dfu-util libhidapi-hidraw0
+
+# Arch
+sudo pacman -S arm-none-eabi-gcc dfu-util hidapi
+
+# Python tooling
+# uv: https://docs.astral.sh/uv/getting-started/installation/
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv tool install qmk --with appdirs --with hjson --with milc --with dotty-dict \
+  --with pygments --with pyserial --with pyusb --with pillow --with hid \
+  --with jsonschema --with colorama --with argcomplete
+```
 
 ### Daemon
 
 ```bash
-git clone <this-repo> ~/git/keylume
+git clone git@github.com:RicardoHS/keylume.git ~/git/keylume
 cd ~/git/keylume
 
 # Install with all optional plugin dependencies
@@ -73,70 +120,42 @@ uv pip install -e .
 
 ### Firmware
 
-The firmware patch adds a small HID command handler to your existing QMK custom
-keymap. You need to copy a few files and apply minimal edits.
+The firmware patch adds a small HID command handler to your QMK build. An
+install script automates the process.
 
-1. Copy the firmware files into your keymap:
-
-```bash
-QMK_KEYMAP=~/git/qmk_firmware/keyboards/keychron/k8_pro/iso/rgb/keymaps/custom
-
-cp firmware/keylume.h "$QMK_KEYMAP/"
-cp firmware/keylume.c "$QMK_KEYMAP/"
-```
-
-2. Edit `rules.mk` in your keymap directory — add:
-
-```makefile
-SRC += keylume.c
-OPT_DEFS += -DKEYLUME_ENABLE
-```
-
-3. Edit `k8_pro.c` (at the keyboard level, not your keymap) — add the
-   `0xAE` case inside `via_command_kb()`:
-
-```c
-// At the top, with the other includes:
-#ifdef KEYLUME_ENABLE
-#    include "keylume.h"
-#endif
-
-// Inside via_command_kb(), before the default case:
-#ifdef KEYLUME_ENABLE
-        case KEYLUME_CMD_ID:
-            keylume_hid_receive(data, length);
-            break;
-#endif
-```
-
-4. Edit `keymap.c` in your keymap directory — add at the bottom:
-
-```c
-#ifdef KEYLUME_ENABLE
-#    include "keylume.h"
-
-bool rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
-    if (!keylume_is_active()) return false;
-    for (uint8_t i = led_min; i < led_max; i++) {
-        uint8_t r, g, b;
-        keylume_get_led(i, &r, &g, &b);
-        rgb_matrix_set_color(i, r, g, b);
-    }
-    return true;
-}
-
-void matrix_scan_user(void) {
-    keylume_task();
-}
-#endif
-```
-
-5. Compile and flash:
+**Automated** (recommended):
 
 ```bash
+# Clone the Keychron QMK fork (bluetooth_playground branch for BT support)
+git clone -b bluetooth_playground https://github.com/Keychron/qmk_firmware.git ~/git/qmk_firmware
+cd ~/git/qmk_firmware
+make git-submodule
+
+# Run the installer — copies all files and patches k8_pro.c
+cd ~/git/keylume
+./firmware/install.sh ~/git/qmk_firmware
+
+# Compile
+cd ~/git/qmk_firmware
 qmk compile -kb keychron/k8_pro/iso/rgb -km custom
-qmk flash -kb keychron/k8_pro/iso/rgb -km custom
+
+# Flash (hold ESC + plug USB to enter DFU)
+dfu-util -a 0 -d 0483:DF11 -s 0x08000000:leave -D keychron_k8_pro_iso_rgb_custom.bin
 ```
+
+The install script:
+1. Creates a `custom` keymap (from the `via` template if none exists)
+2. Copies `keylume.h`, `keylume.c`, `keymap.c`, `rules.mk` into the keymap
+3. Applies `k8_pro.patch` to route HID command `0xAE` to the keylume handler
+
+**Manual** (if you have an existing custom keymap you don't want to overwrite):
+
+See [FIRMWARE.md](FIRMWARE.md) section 13 for the exact code changes, or read
+the files in `firmware/` — there are only 3 edits to make:
+
+1. Add `SRC += keylume.c` and `OPT_DEFS += -DKEYLUME_ENABLE` to your `rules.mk`
+2. Add the `case KEYLUME_CMD_ID:` block to `via_command_kb()` in `k8_pro.c`
+3. Add the `rgb_matrix_indicators_advanced_user()` hook to your `keymap.c`
 
 ## Configuration
 
@@ -319,8 +338,12 @@ keylume/
 ├── keylume.yaml.example        # Example configuration
 ├── keylume.service             # systemd user unit
 ├── firmware/
+│   ├── install.sh              # Automated firmware installer
 │   ├── keylume.h               # Firmware header (protocol defines)
-│   └── keylume.c               # Firmware HID handler + double buffer
+│   ├── keylume.c               # Firmware HID handler + double buffer
+│   ├── keymap.c                # Complete keymap with keylume hooks
+│   ├── rules.mk                # Build config for the custom keymap
+│   └── k8_pro.patch            # Patch for the keyboard-level HID dispatch
 └── src/keylume/
     ├── __main__.py             # python -m keylume
     ├── cli.py                  # Click CLI (start, stop, status, test, off)
@@ -374,6 +397,74 @@ with HIDTransport() as hid:
     print(hid.send_and_receive(encode_disable()))
 ```
 
+## Porting to other Keychron keyboards
+
+Keylume currently targets the K8 Pro ISO RGB, but the architecture is designed to
+work with any Keychron keyboard running QMK with RGB matrix. **PRs adding support
+for other Keychron models are very welcome!**
+
+### What you need to change
+
+The daemon side is keyboard-agnostic — it only cares about `led_count` (reported
+via PING/PONG) and the HID vendor/product IDs. The firmware side needs minor
+adjustments per model:
+
+1. **Identify your keyboard's QMK path.** Keychron keyboards live under
+   `keyboards/keychron/<model>/` in the QMK tree. Common examples:
+   - `keychron/k8_pro/iso/rgb` (this project)
+   - `keychron/q1/ansi/rgb`
+   - `keychron/v1/iso/rgb`
+   - `keychron/k2_pro/ansi/rgb`
+
+2. **Find the keyboard-level HID dispatch file.** This is the file that contains
+   `via_command_kb()`. For the K8 Pro it's `k8_pro.c`, for the Q1 it's `q1.c`,
+   etc. This is the only file outside the keymap directory you need to patch.
+
+3. **Copy the firmware files.** The files in `firmware/` (`keylume.h`, `keylume.c`,
+   `keymap.c`, `rules.mk`) go into your keyboard's `keymaps/custom/` directory.
+   `keylume.h` and `keylume.c` work unchanged on any Keychron — they only depend
+   on `RGB_MATRIX_LED_COUNT` which QMK defines per keyboard.
+
+4. **Adapt the keymap.** The `keymap.c` file contains the key layout, which
+   differs per keyboard. Copy the `via` keymap as a starting point and add the
+   keylume hooks at the bottom (see `firmware/keymap.c` for the pattern). The
+   keylume hooks are always the same — only the `keymaps[]` array changes.
+
+5. **Create a new patch.** Apply the same two-line change to the keyboard-level
+   file (include `keylume.h` + add `case KEYLUME_CMD_ID` in `via_command_kb()`),
+   then generate a patch with `git diff`.
+
+6. **Update the install script (optional).** You can either create a separate
+   `install_<model>.sh` or extend `install.sh` to accept a `--keyboard` flag.
+
+7. **Update `hid_vendor_id` / `hid_product_id` in the config.** Each Keychron
+   model has different USB IDs. Find yours with `lsusb` or check VIA's
+   `keyboards/` directory.
+
+### Directory convention for multi-keyboard support
+
+If you're adding a new keyboard, create a subdirectory under `firmware/`:
+
+```
+firmware/
+├── install.sh                  # Installer (supports --keyboard flag)
+├── keylume.h                   # Shared — works on all keyboards
+├── keylume.c                   # Shared — works on all keyboards
+├── k8_pro/
+│   ├── keymap.c                # K8 Pro ISO layout
+│   ├── rules.mk
+│   └── k8_pro.patch
+├── q1/
+│   ├── keymap.c                # Q1 ANSI layout
+│   ├── rules.mk
+│   └── q1.patch
+└── ...
+```
+
+For a detailed walkthrough of QMK internals (matrix scanning, LED drivers, the
+VIA protocol, build system), see **[FIRMWARE.md](FIRMWARE.md)** — it covers
+everything you need to write firmware for any Keychron model.
+
 ## Contributing
 
 1. Fork the repo and create a feature branch
@@ -382,6 +473,11 @@ with HIDTransport() as hid:
 4. Test with an actual keyboard if touching the protocol or firmware
 5. For new plugins: add them to `src/keylume/plugins/`, register in
    `plugins/__init__.py` BUILTIN_PLUGINS, and add a section in the example config
+6. **Firmware for other Keychron models**: PRs adding support for other keyboards
+   are more than welcome! See [Porting to other Keychron keyboards](#porting-to-other-keychron-keyboards)
+   for a step-by-step guide. If you have a Keychron keyboard and can test, your
+   contribution is especially valuable — the HID protocol and daemon work
+   unchanged, only the keymap and patch need adapting
 
 ## License
 

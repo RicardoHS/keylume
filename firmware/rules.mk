@@ -1,0 +1,3 @@
+VIA_ENABLE = yes
+SRC += keylume.c
+OPT_DEFS += -DKEYLUME_ENABLE

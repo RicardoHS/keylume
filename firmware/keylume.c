@@ -74,7 +74,7 @@ void keylume_hid_receive(uint8_t *data, uint8_t length) {
     uint8_t subcmd = data[1];
 
     switch (subcmd) {
-        case KEYLUME_ENABLE: {
+        case KEYLUME_SUB_ENABLE: {
             uint8_t timeout_s = data[2];
             keylume_activate(timeout_s);
             compute_frame_expected();
@@ -82,12 +82,12 @@ void keylume_hid_receive(uint8_t *data, uint8_t length) {
             break;
         }
 
-        case KEYLUME_DISABLE:
+        case KEYLUME_SUB_DISABLE:
             keylume_deactivate();
             send_ack(data, length);
             break;
 
-        case KEYLUME_SET_ALL:
+        case KEYLUME_SUB_SET_ALL:
             if (!keylume_active) { send_nack(data, length); break; }
             keylume_last_hid = timer_read32();
             for (uint8_t i = 0; i < RGB_MATRIX_LED_COUNT; i++) {
@@ -99,7 +99,7 @@ void keylume_hid_receive(uint8_t *data, uint8_t length) {
             send_ack(data, length);
             break;
 
-        case KEYLUME_SET_ONE:
+        case KEYLUME_SUB_SET_ONE:
             if (!keylume_active) { send_nack(data, length); break; }
             keylume_last_hid = timer_read32();
             {
@@ -113,7 +113,7 @@ void keylume_hid_receive(uint8_t *data, uint8_t length) {
             send_ack(data, length);
             break;
 
-        case KEYLUME_SET_BATCH:
+        case KEYLUME_SUB_SET_BATCH:
             if (!keylume_active) { send_nack(data, length); break; }
             keylume_last_hid = timer_read32();
             {
@@ -134,7 +134,7 @@ void keylume_hid_receive(uint8_t *data, uint8_t length) {
             send_ack(data, length);
             break;
 
-        case KEYLUME_SET_FRAME:
+        case KEYLUME_SUB_SET_FRAME:
             if (!keylume_active) { send_nack(data, length); break; }
             keylume_last_hid = timer_read32();
             {
@@ -174,13 +174,13 @@ void keylume_hid_receive(uint8_t *data, uint8_t length) {
             send_ack(data, length);
             break;
 
-        case KEYLUME_HEARTBEAT:
+        case KEYLUME_SUB_HEARTBEAT:
             if (!keylume_active) { send_nack(data, length); break; }
             keylume_last_hid = timer_read32();
             send_ack(data, length);
             break;
 
-        case KEYLUME_PING: {
+        case KEYLUME_SUB_PING: {
             memset(data + 1, 0, length - 1);
             data[0] = KEYLUME_CMD_ID;
             data[1] = KEYLUME_PONG;

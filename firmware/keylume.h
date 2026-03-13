@@ -9,14 +9,14 @@
 #define KEYLUME_VERSION      0x01
 
 // Sub-commands
-#define KEYLUME_ENABLE       0x01
-#define KEYLUME_DISABLE      0x02
-#define KEYLUME_SET_ALL      0x03
-#define KEYLUME_SET_ONE      0x04
-#define KEYLUME_SET_BATCH    0x05
-#define KEYLUME_SET_FRAME    0x06
-#define KEYLUME_HEARTBEAT    0x07
-#define KEYLUME_PING         0x08
+#define KEYLUME_SUB_ENABLE    0x01
+#define KEYLUME_SUB_DISABLE   0x02
+#define KEYLUME_SUB_SET_ALL   0x03
+#define KEYLUME_SUB_SET_ONE   0x04
+#define KEYLUME_SUB_SET_BATCH 0x05
+#define KEYLUME_SUB_SET_FRAME 0x06
+#define KEYLUME_SUB_HEARTBEAT 0x07
+#define KEYLUME_SUB_PING      0x08
 
 // Response codes
 #define KEYLUME_ACK          0x01
