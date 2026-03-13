@@ -8,6 +8,11 @@ anything else you can write a plugin for.
 The firmware is touched once to accept HID commands. All effect logic lives in
 the daemon, so new effects never require re-flashing.
 
+> **New to QMK or Keychron firmware?** Read
+> **[FIRMWARE.md](FIRMWARE.md)** — a detailed technical guide covering the
+> full keyboard architecture (matrix scanning, LED drivers, VIA protocol, build
+> system) with Keylume as a worked example.
+
 ## How it works
 
 ```
