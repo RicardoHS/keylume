@@ -1,0 +1,38 @@
+daemon:
+  fps: 30
+  hid_vendor_id: 0x3434
+  hid_product_id: 0x0281
+  timeout: 5
+
+plugins:
+  audio:
+    enabled: true
+    priority: 40
+    opacity: 0.8
+    params:
+      color_low: [0, 0, 255]
+      color_high: [255, 0, 0]
+
+  idle:
+    enabled: true
+    priority: 10
+    params:
+      timeout: 120
+      color: [30, 30, 80]
+
+  notify:
+    enabled: true
+    priority: 90
+    blend_mode: add
+    params:
+      color: [255, 200, 0]
+      duration: 0.5
+
+  screen:
+    enabled: true
+    priority: 30
+    params:
+      sample_interval: 1.0
+
+plugin_dirs:
+  - ~/.config/keylume/plugins

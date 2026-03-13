@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "keylume"
+version = "0.1.0"
+description = "Daemon that controls Keychron K8 Pro LEDs via HID"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml>=6.0",
+    "numpy>=1.24",
+    "hid>=1.0.5",
+    "click>=8.0",
+]
+
+[project.optional-dependencies]
+audio = ["pulsectl>=23.5"]
+notify = ["dasbus>=1.7"]
+screen = ["pillow>=10.0"]
+all = ["keylume[audio,notify,screen]"]
+
+[project.scripts]
+keylume = "keylume.cli:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/keylume"]

@@ -1,0 +1,16 @@
+[Unit]
+Description=Keylume LED control daemon
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/keylume start
+ExecStop=/usr/bin/keylume off
+Restart=on-failure
+RestartSec=5
+
+# HID device access — user must be in plugdev/input group or use udev rules
+SupplementaryGroups=plugdev input
+
+[Install]
+WantedBy=default.target
