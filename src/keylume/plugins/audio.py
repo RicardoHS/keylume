@@ -1,11 +1,10 @@
-"""Audio plugin — FFT visualization from PipeWire/PulseAudio."""
+"""Audio plugin — reactive visualization from PipeWire/PulseAudio."""
 from __future__ import annotations
 
 import logging
 import subprocess
 import struct
 import threading
-import time
 
 import numpy as np
 
@@ -14,9 +13,9 @@ from keylume.types import LED_COUNT, LEDFrame, PluginConfig, empty_frame
 
 logger = logging.getLogger(__name__)
 
-SAMPLE_RATE = 44100
+SAMPLE_RATE = 48000
 CHUNK_SIZE = 1024
-NUM_BANDS = LED_COUNT  # one band per LED
+CHANNELS = 2
 
 
 class AudioPlugin(Plugin):
@@ -30,6 +29,7 @@ class AudioPlugin(Plugin):
         self._process: subprocess.Popen | None = None
         self._running = False
         self._current_frame: LEDFrame = empty_frame()
+        self._capture_volume: float = 10.0
 
     def start(self, config: PluginConfig) -> None:
         self._config = config
@@ -37,6 +37,7 @@ class AudioPlugin(Plugin):
         ch = config.params.get("color_high", [255, 0, 0])
         self._color_low = np.array(cl, dtype=np.uint8)
         self._color_high = np.array(ch, dtype=np.uint8)
+        self._capture_volume = config.params.get("capture_volume", 10.0)
         self._running = True
         self._thread = threading.Thread(target=self._audio_loop, daemon=True)
         self._thread.start()
@@ -50,19 +51,51 @@ class AudioPlugin(Plugin):
             self._thread.join(timeout=3)
             self._thread = None
 
+    @staticmethod
+    def _find_monitor_target() -> str | None:
+        """Find the default sink's monitor node for capture."""
+        try:
+            result = subprocess.run(
+                ["pactl", "info"],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in result.stdout.splitlines():
+                if "Default Sink:" in line:
+                    sink_name = line.split(":", 1)[1].strip()
+                    return f"{sink_name}.monitor"
+        except Exception:
+            pass
+        return None
+
     def _audio_loop(self) -> None:
-        """Capture audio via pw-cat and run FFT."""
+        """Capture audio via pw-cat from the default sink monitor."""
+        monitor = self._find_monitor_target()
+        if monitor:
+            logger.info("Capturing audio from: %s", monitor)
+        else:
+            logger.warning("Could not find default sink monitor, trying default")
+
+        # Find the sink name (not the monitor — we use stream.capture.sink)
+        sink_name = None
+        if monitor and monitor.endswith(".monitor"):
+            sink_name = monitor[:-len(".monitor")]
+
+        cmd = [
+            "pw-cat",
+            "-r",
+            "--format", "s16",
+            "--rate", str(SAMPLE_RATE),
+            "--channels", str(CHANNELS),
+            "--volume", str(self._capture_volume),
+            "-P", '{"stream.capture.sink": "true"}',
+        ]
+        if sink_name:
+            cmd += ["--target", sink_name]
+        cmd.append("-")
+
         try:
             self._process = subprocess.Popen(
-                [
-                    "pw-cat",
-                    "--target", "0",  # default sink monitor
-                    "-r",             # record mode
-                    "--format", "s16",
-                    "--rate", str(SAMPLE_RATE),
-                    "--channels", "1",
-                    "-",
-                ],
+                cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
             )
@@ -70,48 +103,62 @@ class AudioPlugin(Plugin):
             logger.warning("pw-cat not found — audio plugin disabled")
             return
 
-        bytes_per_chunk = CHUNK_SIZE * 2  # 16-bit mono
+        bytes_per_chunk = CHUNK_SIZE * CHANNELS * 2
+        smooth_volume = 0.0
+        NOISE_FLOOR = 0.005
+        WINDOW_SECONDS = 3  # rolling window for adaptive normalization
+        window_size = int(SAMPLE_RATE / CHUNK_SIZE * WINDOW_SECONDS)
+        rms_history: list[float] = []
+
+        # Skip first chunk (initial buffer garbage)
+        self._process.stdout.read(bytes_per_chunk)
 
         while self._running and self._process.poll() is None:
             raw = self._process.stdout.read(bytes_per_chunk)
             if not raw or len(raw) < bytes_per_chunk:
                 break
 
-            samples = np.array(
-                struct.unpack(f"<{CHUNK_SIZE}h", raw),
+            # Decode stereo s16 → mono float
+            raw_samples = np.array(
+                struct.unpack(f"<{CHUNK_SIZE * CHANNELS}h", raw),
                 dtype=np.float32,
             )
-            samples /= 32768.0  # normalize
+            samples = (raw_samples[0::2] + raw_samples[1::2]) / 2.0 / 32768.0
 
-            # FFT
-            spectrum = np.abs(np.fft.rfft(samples * np.hanning(CHUNK_SIZE)))
-            spectrum = spectrum[1:]  # drop DC
+            rms = np.sqrt(np.mean(samples * samples))
 
-            # Bin into LED_COUNT bands (log-spaced)
-            freq_bins = np.logspace(
-                np.log10(1), np.log10(len(spectrum) - 1),
-                num=LED_COUNT + 1, dtype=int,
-            )
-            bands = np.zeros(LED_COUNT, dtype=np.float32)
-            for i in range(LED_COUNT):
-                lo, hi = freq_bins[i], freq_bins[i + 1]
-                if hi <= lo:
-                    hi = lo + 1
-                bands[i] = spectrum[lo:hi].mean()
+            if rms < NOISE_FLOOR:
+                vol = 0.0
+            else:
+                # Track RMS in rolling window for adaptive normalization
+                rms_history.append(rms)
+                if len(rms_history) > window_size:
+                    rms_history.pop(0)
 
-            # Normalize
-            peak = bands.max()
-            if peak > 0:
-                bands /= peak
+                # Normalize against the peak of the rolling window
+                # so volume always reaches 0-100% relative to recent audio
+                window_peak = max(rms_history)
+                window_floor = min(rms_history)
+                rng = window_peak - window_floor
+                if rng > NOISE_FLOOR:
+                    vol = (rms - window_floor) / rng
+                else:
+                    vol = rms / max(window_peak, NOISE_FLOOR)
+                vol = min(max(vol, 0.0), 1.0)
 
-            # Map to colors: low → color_low, high → color_high
+            # Smooth: fast attack, instant-ish decay for punchier effect
+            if vol > smooth_volume:
+                smooth_volume = vol
+            else:
+                smooth_volume = smooth_volume * 0.5 + vol * 0.5
+
+            # All LEDs: color based on volume (low→color_low, high→color_high)
+            t = smooth_volume
+            color = (self._color_low * (1 - t) + self._color_high * t).astype(np.uint8)
+
             frame = np.empty((LED_COUNT, 4), dtype=np.uint8)
-            for i in range(LED_COUNT):
-                t = bands[i]
-                frame[i, :3] = (
-                    self._color_low * (1 - t) + self._color_high * t
-                ).astype(np.uint8)
-                frame[i, 3] = int(t * 255)
+            frame[:, :3] = color
+            frame[:, 3] = 255
 
             self._current_frame = frame
 
@@ -123,6 +170,7 @@ class AudioPlugin(Plugin):
         ch = config.params.get("color_high", [255, 0, 0])
         self._color_low = np.array(cl, dtype=np.uint8)
         self._color_high = np.array(ch, dtype=np.uint8)
+        self._capture_volume = config.params.get("capture_volume", 10.0)
 
 
 PLUGIN_CLASS = AudioPlugin

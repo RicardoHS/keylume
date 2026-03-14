@@ -16,7 +16,7 @@ static bool    frame_dirty = false;
 
 // For SET_FRAME reassembly
 static uint8_t frame_seq       = 0;
-static uint8_t frame_received  = 0;  // bitmask of received chunks (10 chunks max)
+static uint16_t frame_received = 0;  // bitmask of received chunks (10 chunks max)
 static uint16_t frame_expected = 0;   // bitmask for complete frame
 
 static void send_response(uint8_t *data, uint8_t response_code, uint8_t length) {
