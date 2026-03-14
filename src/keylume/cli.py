@@ -19,11 +19,17 @@ from keylume.protocol import (
 
 @click.group()
 @click.option("-c", "--config", "config_path", type=click.Path(exists=True), default=None)
-@click.option("-v", "--verbose", is_flag=True)
+@click.option("-v", "--verbose", is_flag=True, help="Show INFO logs.")
+@click.option("-d", "--debug", is_flag=True, help="Show DEBUG logs (all modules).")
 @click.pass_context
-def cli(ctx, config_path, verbose):
+def cli(ctx, config_path, verbose, debug):
     """Keylume — external LED control for Keychron K8 Pro."""
-    level = logging.DEBUG if verbose else logging.INFO
+    if debug:
+        level = logging.DEBUG
+    elif verbose:
+        level = logging.INFO
+    else:
+        level = logging.WARNING
     logging.basicConfig(
         level=level,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
