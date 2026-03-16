@@ -73,8 +73,11 @@ forever {
 ```
 
 Each iteration of this loop is called a **scan cycle**. On the K8 Pro it runs
-at roughly 1000 Hz (1 ms per cycle). The RGB matrix engine runs at a lower
-effective rate controlled by `RGB_MATRIX_LED_FLUSH_LIMIT`.
+at roughly 400 Hz (~2.5 ms per cycle). The rate is lower than the typical QMK
+1000 Hz because the K8 Pro uses a 74HC595 shift register for 16 of its 17
+columns, requiring bit-banged serial I/O for each column scan. The RGB matrix
+engine runs at an even lower effective rate controlled by
+`RGB_MATRIX_LED_FLUSH_LIMIT`.
 
 ---
 
@@ -675,8 +678,8 @@ void matrix_scan_kb(void) {
 }
 ```
 
-This function is called every scan cycle (~1 ms), so timer checks are
-essentially free.
+This function is called every scan cycle (~2.5 ms on the K8 Pro), so timer
+checks are essentially free.
 
 ---
 
@@ -1058,7 +1061,7 @@ void my_feature_init(void) {
 }
 
 void my_feature_task(void) {
-    // Called every scan cycle (~1ms)
+    // Called every scan cycle (~2.5ms)
 }
 
 bool my_feature_process_record(uint16_t keycode, keyrecord_t *record) {
@@ -1111,7 +1114,7 @@ These are the primary hooks available to keymap authors:
 | Callback                                    | When                          | Where   |
 |---------------------------------------------|-------------------------------|---------|
 | `keyboard_post_init_user()`                | Once at startup               | keymap  |
-| `matrix_scan_user()`                       | Every scan cycle (~1ms)       | keymap  |
+| `matrix_scan_user()`                       | Every scan cycle (~2.5ms)     | keymap  |
 | `process_record_user(keycode, record)`     | Every key press/release       | keymap  |
 | `rgb_matrix_indicators_user()`             | Every RGB frame               | keymap  |
 | `rgb_matrix_indicators_advanced_user(min, max)` | Every RGB frame (ranged) | keymap  |

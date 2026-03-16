@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import signal
 import sys
 from pathlib import Path
 
@@ -41,13 +43,34 @@ def cli(ctx, config_path, verbose, debug):
 
 
 @cli.command()
+@click.option("--tray/--no-tray", default=False, help="Show system tray icon.")
 @click.pass_context
-def start(ctx):
+def start(ctx, tray):
     """Start the keylume daemon (foreground)."""
+    import threading
+
     from keylume.daemon import Daemon
 
     config = ctx.obj["config"]
     daemon = Daemon(config)
+
+    if tray:
+        my_pid = os.getpid()
+
+        def _run_tray():
+            try:
+                from keylume.tray import run_tray
+                run_tray(
+                    config,
+                    on_quit=lambda: os.kill(my_pid, signal.SIGTERM),
+                    on_reload=lambda: os.kill(my_pid, signal.SIGHUP),
+                )
+            except Exception:
+                logging.getLogger(__name__).exception("Tray failed")
+
+        t = threading.Thread(target=_run_tray, daemon=True)
+        t.start()
+
     daemon.run()
 
 
@@ -112,6 +135,15 @@ def test(ctx, color: str):
         sys.exit(1)
     finally:
         hid.close()
+
+
+@cli.command()
+@click.pass_context
+def tray(ctx):
+    """Launch system tray app for live configuration."""
+    from keylume.tray import run_tray
+
+    run_tray(ctx.obj["config"])
 
 
 @cli.command()

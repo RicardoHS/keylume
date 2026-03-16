@@ -18,7 +18,8 @@ dependencies = [
 audio = ["pulsectl>=23.5"]
 notify = ["dasbus>=1.7"]
 screen = ["pillow>=10.0"]
-all = ["keylume[audio,notify,screen]"]
+tray = ["pystray>=0.19", "pillow>=10.0"]
+all = ["keylume[audio,notify,screen,tray]"]
 
 [project.scripts]
 keylume = "keylume.cli:cli"

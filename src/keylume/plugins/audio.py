@@ -218,6 +218,7 @@ class AudioPlugin(Plugin):
         self._thread: threading.Thread | None = None
         self._process: subprocess.Popen | None = None
         self._running = False
+        self._mode_changed = threading.Event()
         self._current_frame: LEDFrame = empty_frame()
 
         # Defaults — overridden by config
@@ -320,16 +321,22 @@ class AudioPlugin(Plugin):
             logger.warning("pw-cat not found — audio plugin disabled")
             return
 
-        logger.info("Audio plugin running in '%s' mode", self._mode)
+        while self._running and self._process.poll() is None:
+            self._mode_changed.clear()
+            logger.info("Audio plugin running in '%s' mode", self._mode)
 
-        if self._mode == "spectrum":
-            self._loop_spectrum()
-        elif self._mode == "bands":
-            self._loop_bands()
-        elif self._mode == "spectrum_bands":
-            self._loop_spectrum_bands()
-        else:
-            self._loop_volume()
+            if self._mode == "spectrum":
+                self._loop_spectrum()
+            elif self._mode == "bands":
+                self._loop_bands()
+            elif self._mode == "spectrum_bands":
+                self._loop_spectrum_bands()
+            else:
+                self._loop_volume()
+
+            # If we exited the loop due to mode change, continue with new mode
+            if not self._mode_changed.is_set():
+                break
 
     def _read_chunk(self) -> np.ndarray | None:
         """Read one chunk of audio and return mono float samples, or None."""
@@ -356,7 +363,7 @@ class AudioPlugin(Plugin):
         # Skip first chunk
         self._read_chunk()
 
-        while self._running and self._process.poll() is None:
+        while self._running and self._process.poll() is None and not self._mode_changed.is_set():
             samples = self._read_chunk()
             if samples is None:
                 break
@@ -409,22 +416,15 @@ class AudioPlugin(Plugin):
 
         smooth_bands = np.zeros(num_cols, dtype=np.float32)
 
-        # Per-band normalizer for log, scalar for linear
-        if self._spec_freq_scale == "log":
-            norm = BandNormalizer(
-                num_cols, self._normalization, self._window_seconds,
-                self._peak_decay, self._hybrid_mix,
-            )
-        else:
-            norm = ScalarNormalizer(
-                self._normalization, self._window_seconds,
-                self._peak_decay, self._hybrid_mix,
-            )
+        norm = BandNormalizer(
+            num_cols, self._normalization, self._window_seconds,
+            self._peak_decay, self._hybrid_mix,
+        )
 
         # Skip first chunk
         self._read_chunk()
 
-        while self._running and self._process.poll() is None:
+        while self._running and self._process.poll() is None and not self._mode_changed.is_set():
             samples = self._read_chunk()
             if samples is None:
                 break
@@ -444,13 +444,8 @@ class AudioPlugin(Plugin):
                         hi = lo + 1
                     bands[i] = spectrum[lo:hi].mean()
 
-                if self._spec_freq_scale == "log":
-                    bands = norm.normalize(bands)
-                else:
-                    peak = bands.max()
-                    normalized_peak = norm.normalize(peak)
-                    if peak > 1e-8:
-                        bands = bands / peak * normalized_peak
+                bands = norm.normalize(bands)
+                if self._spec_freq_scale != "log":
                     bands = np.power(bands, 0.5)
                 np.clip(bands, 0.0, 1.0, out=bands)
 
@@ -525,7 +520,7 @@ class AudioPlugin(Plugin):
         # Skip first chunk
         self._read_chunk()
 
-        while self._running and self._process.poll() is None:
+        while self._running and self._process.poll() is None and not self._mode_changed.is_set():
             samples = self._read_chunk()
             if samples is None:
                 break
@@ -771,7 +766,7 @@ class AudioPlugin(Plugin):
         # Skip first chunk
         self._read_chunk()
 
-        while self._running and self._process.poll() is None:
+        while self._running and self._process.poll() is None and not self._mode_changed.is_set():
             samples = self._read_chunk()
             if samples is None:
                 break
@@ -817,7 +812,11 @@ class AudioPlugin(Plugin):
         return self._current_frame
 
     def on_config_reload(self, config: PluginConfig) -> None:
+        old_mode = self._mode
         self._load_config(config)
+        if self._mode != old_mode:
+            logger.info("Mode changed: %s → %s", old_mode, self._mode)
+            self._mode_changed.set()
 
 
 PLUGIN_CLASS = AudioPlugin
