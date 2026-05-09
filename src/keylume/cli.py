@@ -3,8 +3,12 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import signal
+import subprocess
 import sys
+import textwrap
+from importlib.resources import files as resource_files
 from pathlib import Path
 
 import click
@@ -64,6 +68,9 @@ def start(ctx, tray):
                     config,
                     on_quit=lambda: os.kill(my_pid, signal.SIGTERM),
                     on_reload=lambda: os.kill(my_pid, signal.SIGHUP),
+                    on_activate=daemon.activate,
+                    on_deactivate=daemon.deactivate,
+                    on_restart=daemon.restart,
                 )
             except Exception:
                 logging.getLogger(__name__).exception("Tray failed")
@@ -144,6 +151,166 @@ def tray(ctx):
     from keylume.tray import run_tray
 
     run_tray(ctx.obj["config"])
+
+
+def _build_cli_prefix(config: Config) -> list[str]:
+    prefix: list[str] = []
+    if config.path:
+        prefix.extend(["-c", str(config.path.expanduser().resolve())])
+    return prefix
+
+
+def _locate_keylume_executable() -> str | None:
+    argv0 = Path(sys.argv[0]).expanduser()
+    if argv0.exists():
+        return str(argv0.resolve())
+    return shutil.which("keylume")
+
+
+def _desktop_file_content(
+    exec_path: str,
+    config: Config,
+    icon_path: str,
+    combined: bool,
+) -> str:
+    command = ["start", "--tray"] if combined else ["tray"]
+    exec_cmd = [exec_path, *_build_cli_prefix(config), *command]
+    exec_str = " ".join(_exec_arg(part) for part in exec_cmd)
+    return textwrap.dedent(
+        f"""\
+        [Desktop Entry]
+        Type=Application
+        Version=1.0
+        Name=Keylume
+        Comment=Control Keylume from the system tray
+        Exec={exec_str}
+        Icon={icon_path}
+        Terminal=false
+        Categories=Utility;Settings;
+        StartupNotify=false
+        """
+    )
+
+
+def _service_file_content(exec_path: str, config: Config) -> str:
+    start_cmd = [exec_path, *_build_cli_prefix(config), "start"]
+    stop_cmd = [exec_path, *_build_cli_prefix(config), "off"]
+    start_str = " ".join(_exec_arg(part) for part in start_cmd)
+    stop_str = " ".join(_exec_arg(part) for part in stop_cmd)
+    return textwrap.dedent(
+        f"""\
+        [Unit]
+        Description=Keylume LED control daemon
+        After=graphical-session.target
+        PartOf=graphical-session.target
+
+        [Service]
+        Type=simple
+        ExecStart={start_str}
+        ExecStop={stop_str}
+        Restart=on-failure
+        RestartSec=5
+        SupplementaryGroups=plugdev input
+
+        [Install]
+        WantedBy=default.target
+        """
+    )
+
+
+def _exec_arg(value: str) -> str:
+    """Quote an argument for desktop entries and systemd unit Exec lines."""
+    escaped = value.replace("%", "%%").replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+@cli.command("install-desktop")
+@click.option("--combined/--split", "combined", default=True, help="Launch the working combined app (`start --tray`) instead of a tray-only frontend.")
+@click.option("--autostart/--no-autostart", default=True, help="Install XDG autostart entry.")
+@click.option("--service/--no-service", "install_service", default=False, help="Install a separate systemd user service for the daemon.")
+@click.option("--enable/--no-enable", "enable_service", default=False, help="Enable and start the systemd user service after installing it.")
+@click.pass_context
+def install_desktop(ctx, combined: bool, autostart: bool, install_service: bool, enable_service: bool):
+    """Install desktop launcher, autostart entry, and user service."""
+    config = ctx.obj["config"]
+    exec_path = _locate_keylume_executable()
+    if not exec_path:
+        click.echo("Could not find the 'keylume' executable in PATH.", err=True)
+        sys.exit(1)
+
+    if combined and install_service:
+        click.echo(
+            "The combined launcher already starts the daemon and tray together; "
+            "do not combine it with --service.",
+            err=True,
+        )
+        sys.exit(1)
+
+    icon_path = resource_files("keylume.assets").joinpath("keylume.svg")
+    applications_dir = Path.home() / ".local" / "share" / "applications"
+    desktop_entry_path = applications_dir / "keylume.desktop"
+    autostart_path = Path.home() / ".config" / "autostart" / "keylume.desktop"
+    service_dir = Path.home() / ".config" / "systemd" / "user"
+    service_path = service_dir / "keylume.service"
+
+    applications_dir.mkdir(parents=True, exist_ok=True)
+    desktop_entry_path.write_text(
+        _desktop_file_content(exec_path, config, str(icon_path), combined=combined),
+        encoding="utf-8",
+    )
+    click.echo(f"Installed desktop launcher: {desktop_entry_path}")
+
+    if autostart:
+        autostart_path.parent.mkdir(parents=True, exist_ok=True)
+        autostart_path.write_text(desktop_entry_path.read_text(encoding="utf-8"), encoding="utf-8")
+        click.echo(f"Installed autostart entry: {autostart_path}")
+
+    if install_service:
+        service_dir.mkdir(parents=True, exist_ok=True)
+        service_path.write_text(
+            _service_file_content(exec_path, config),
+            encoding="utf-8",
+        )
+        click.echo(f"Installed user service: {service_path}")
+
+        try:
+            daemon_reload = subprocess.run(
+                ["systemctl", "--user", "daemon-reload"],
+                capture_output=True,
+                text=True,
+            )
+        except OSError as e:
+            click.echo(f"Warning: could not run systemctl --user: {e}", err=True)
+            daemon_reload = None
+        if daemon_reload is None:
+            pass
+        elif daemon_reload.returncode != 0:
+            click.echo(
+                f"Warning: systemctl --user daemon-reload failed: {daemon_reload.stderr.strip()}",
+                err=True,
+            )
+        elif enable_service:
+            try:
+                enable = subprocess.run(
+                    ["systemctl", "--user", "enable", "--now", "keylume.service"],
+                    capture_output=True,
+                    text=True,
+                )
+            except OSError as e:
+                click.echo(f"Warning: could not enable keylume.service: {e}", err=True)
+            else:
+                if enable.returncode != 0:
+                    click.echo(
+                        f"Warning: enabling keylume.service failed: {enable.stderr.strip()}",
+                        err=True,
+                    )
+                else:
+                    click.echo("Enabled and started keylume.service")
+
+    click.echo("")
+    click.echo("Launcher command:")
+    launcher_command = "start --tray" if combined else "tray"
+    click.echo(f"  {exec_path} {' '.join(_build_cli_prefix(config))} {launcher_command}".rstrip())
 
 
 @cli.command()

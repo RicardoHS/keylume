@@ -90,6 +90,51 @@ def _reload_daemon() -> bool:
     return False
 
 
+def _signal_daemon(sig: int) -> bool:
+    pid = _find_daemon_pid()
+    if pid:
+        try:
+            os.kill(pid, sig)
+            return True
+        except ProcessLookupError:
+            pass
+    return False
+
+
+def _control_systemd(action: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", action, "keylume"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _deactivate_daemon() -> bool:
+    sigusr1 = getattr(signal, "SIGUSR1", None)
+    if sigusr1 is not None and _signal_daemon(sigusr1):
+        return True
+    return _control_systemd("stop")
+
+
+def _activate_daemon() -> bool:
+    sigusr2 = getattr(signal, "SIGUSR2", None)
+    if sigusr2 is not None and _signal_daemon(sigusr2):
+        return True
+    return _control_systemd("start")
+
+
+def _restart_daemon() -> bool:
+    sigcont = getattr(signal, "SIGCONT", None)
+    if sigcont is not None and _signal_daemon(sigcont):
+        return True
+    return _control_systemd("restart")
+
+
 def _rgb_to_hex(rgb: list[int]) -> str:
     r = max(0, min(255, int(rgb[0])))
     g = max(0, min(255, int(rgb[1])))
@@ -298,10 +343,21 @@ class AudioMonitor:
 class TrayApp:
     """System tray icon with configuration window."""
 
-    def __init__(self, config: Config, on_quit=None, on_reload=None):
+    def __init__(
+        self,
+        config: Config,
+        on_quit=None,
+        on_reload=None,
+        on_activate=None,
+        on_deactivate=None,
+        on_restart=None,
+    ):
         self.config = config
         self._on_quit = on_quit
         self._on_reload = on_reload or _reload_daemon
+        self._on_activate = on_activate or _activate_daemon
+        self._on_deactivate = on_deactivate or _deactivate_daemon
+        self._on_restart = on_restart or _restart_daemon
         self._settings_window: SettingsWindow | None = None
 
     def run(self) -> None:
@@ -334,6 +390,9 @@ class TrayApp:
                                     checked=lambda item: self._get_param("mode") == "spectrum_bands"),
                 ),
             ),
+            pystray.MenuItem("Activate", lambda: self._on_activate()),
+            pystray.MenuItem("Deactivate", lambda: self._on_deactivate()),
+            pystray.MenuItem("Restart", lambda: self._on_restart()),
             pystray.MenuItem("Reload", lambda: self._on_reload()),
             pystray.MenuItem("Quit", self._quit),
         )
@@ -1083,7 +1142,21 @@ class SettingsWindow:
         self.root.after(2000, lambda: self._status_label.config(text=""))
 
 
-def run_tray(config: Config, on_quit=None, on_reload=None) -> None:
+def run_tray(
+    config: Config,
+    on_quit=None,
+    on_reload=None,
+    on_activate=None,
+    on_deactivate=None,
+    on_restart=None,
+) -> None:
     """Entry point for the tray app."""
-    app = TrayApp(config, on_quit=on_quit, on_reload=on_reload)
+    app = TrayApp(
+        config,
+        on_quit=on_quit,
+        on_reload=on_reload,
+        on_activate=on_activate,
+        on_deactivate=on_deactivate,
+        on_restart=on_restart,
+    )
     app.run()

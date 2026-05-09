@@ -116,6 +116,13 @@ uv pip install -e ".[all]"
 
 # Or just core (you pick which plugins to install later)
 uv pip install -e .
+
+# Build a wheel and install it into the project virtualenv
+uv build
+uv pip install dist/keylume-*.whl
+
+# If `keylume` is not on PATH, use the installed virtualenv binary
+./.venv/bin/keylume install-desktop
 ```
 
 ### Firmware
@@ -232,10 +239,27 @@ keylume off
 ### systemd user service
 
 ```bash
-mkdir -p ~/.config/systemd/user
-cp keylume.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now keylume
+# Install the app launcher and tray autostart entry.
+# This launches the same combined app as: keylume start --tray
+keylume install-desktop
+```
+
+If `keylume` is not available in your shell, invoke the installed binary
+directly, for example:
+
+```bash
+./.venv/bin/keylume install-desktop
+```
+
+This is the recommended desktop setup:
+
+- `keylume.desktop` launches the daemon and tray together from your desktop menu
+- `~/.config/autostart/keylume.desktop` starts the same combined app when you log in
+
+If you explicitly want a split setup with a separate daemon service, use:
+
+```bash
+keylume install-desktop --split --service --enable
 ```
 
 ## Permissions
